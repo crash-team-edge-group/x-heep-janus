@@ -56,6 +56,7 @@ filesets:
 
   rtl-simulation:
     depend:
+    - use_janus ? (janus:ip:janus_ce)
     - pulp-platform.org::tech_cells_generic
     - x-heep:sim:sram_wrapper
     - x-heep:sim:pad_cells

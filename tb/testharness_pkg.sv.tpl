@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 <%
   user_peripheral_domain = xheep.get_user_peripheral_domain()
+  janus = xheep.is_extension_defined("testharness") and xheep.get_extension("testharness").get("JANUS", 0)
 %>
 package testharness_pkg;
 
@@ -13,7 +14,7 @@ package testharness_pkg;
 `ifdef SIM_SYSTEMC
   localparam EXT_XBAR_NSLAVE = 1;
 `else
-  localparam EXT_XBAR_NSLAVE = ${3 + (1 if user_peripheral_domain.contains_peripheral('serial_link_reg') else 0)};
+  localparam EXT_XBAR_NSLAVE = ${3 + (1 if user_peripheral_domain.contains_peripheral('serial_link_reg') else 0) + (1 if janus else 0)};
 `endif
 
   //master idx
@@ -59,6 +60,14 @@ package testharness_pkg;
   localparam logic [31:0] DOT_PRODUCT_CTRL_END_ADDRESS = DOT_PRODUCT_CTRL_START_ADDRESS + DOT_PRODUCT_CTRL_SIZE;
   localparam logic [31:0] DOT_PRODUCT_CTRL_IDX = ${2 + (1 if user_peripheral_domain.contains_peripheral('serial_link_reg') else 0)};
 
+  % if janus:
+  // JANUS Cryptographic Engine + Wall: 64 KiB OBI window (janus/docs/memory_map.md)
+  localparam logic [31:0] JANUS_CE_START_ADDRESS = core_v_mini_mcu_pkg::EXT_SLAVE_START_ADDRESS + 32'h100000;
+  localparam logic [31:0] JANUS_CE_SIZE = 32'h10000;
+  localparam logic [31:0] JANUS_CE_END_ADDRESS = JANUS_CE_START_ADDRESS + JANUS_CE_SIZE;
+  localparam logic [31:0] JANUS_CE_IDX = ${3 + (1 if user_peripheral_domain.contains_peripheral('serial_link_reg') else 0)};
+  % endif
+
   localparam addr_map_rule_t [EXT_XBAR_NSLAVE-1:0] EXT_XBAR_ADDR_RULES = '{
       '{
           idx: SLOW_MEMORY0_IDX,
@@ -84,6 +93,10 @@ package testharness_pkg;
           start_addr: DOT_PRODUCT_CTRL_START_ADDRESS,
           end_addr: DOT_PRODUCT_CTRL_END_ADDRESS
       }
+      % if janus:
+      ,
+      '{idx: JANUS_CE_IDX, start_addr: JANUS_CE_START_ADDRESS, end_addr: JANUS_CE_END_ADDRESS}
+      % endif
 `endif
   };
 

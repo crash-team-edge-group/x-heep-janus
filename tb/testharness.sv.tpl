@@ -11,6 +11,8 @@ import UPF::*;
   user_peripheral_domain = xheep.get_user_peripheral_domain()
   xif = xheep.xif()
   th  = xheep.get_extension("testharness")
+  janus = xheep.is_extension_defined("testharness") and th.get("JANUS", 0)
+  janus_toy_cau = th.get("JANUS_TOY_CAU", 1) if janus else 0
 %>
 
 module testharness #(
@@ -80,9 +82,11 @@ module testharness #(
 % if xheep.is_extension_defined("testharness"):
   localparam bit FPU_SS_ZFINX = 1'b${th["FPU_SS_ZFINX"]};
   localparam bit QUADRILATERO = 1'b${th["QUADRILATERO"]};
+  localparam bit JANUS = 1'b${th.get("JANUS", 0)};
 % else:
   localparam bit FPU_SS_ZFINX = 1'b0;
   localparam bit QUADRILATERO = 1'b0;
+  localparam bit JANUS = 1'b0;
 % endif
 
   // Internal signals
@@ -241,6 +245,7 @@ module testharness #(
   initial begin
     $display("%t: the parameter FPU_SS_ZFINX is %x", $time, FPU_SS_ZFINX);
     $display("%t: the parameter QUADRILATERO is %x", $time, QUADRILATERO);
+    $display("%t: the parameter JANUS is %x", $time, JANUS);
     $display("%t: the parameter JTAG_DPI is %x", $time, JTAG_DPI);
     $display("%t: the parameter EXT_DOMAINS is %x", $time, core_v_mini_mcu_pkg::EXTERNAL_DOMAINS);
     $display("%t: the parameter USE_EXTERNAL_DEVICE_EXAMPLE is %x", $time,
@@ -797,7 +802,7 @@ module testharness #(
       //          R4-type instruction format, with 3 source operands. One example is 'fmadd.s'. So
       //          make sure not to use CV32E20 if you need a RV32F-compliant system. The FPU is
       //          connected here just for testing purposes.
-      if ((core_v_mini_mcu_pkg::CpuType == cv32e40x || core_v_mini_mcu_pkg::CpuType == cv32e40px || (FPU_SS_ZFINX && core_v_mini_mcu_pkg::CpuType == cv32e20)) && ${"1" if xif != None else "0"} && (QUADRILATERO == 0)) begin: gen_fpu_ss_wrapper
+      if ((core_v_mini_mcu_pkg::CpuType == cv32e40x || core_v_mini_mcu_pkg::CpuType == cv32e40px || (FPU_SS_ZFINX && core_v_mini_mcu_pkg::CpuType == cv32e20)) && ${"1" if xif != None else "0"} && (QUADRILATERO == 0) && (JANUS == 0)) begin: gen_fpu_ss_wrapper
         fpu_ss_wrapper #(
             .PULP_ZFINX(FPU_SS_ZFINX),
             .INPUT_BUFFER_DEPTH(1),
@@ -820,6 +825,34 @@ module testharness #(
         );
       end
 
+      // JANUS Cryptographic Engine + Wall (CV-X-IF coprocessor + OBI slave on ext-slave JANUS_CE_IDX)
+      // ------------------------------------------------------------------------------------------
+% if janus:
+      if ((core_v_mini_mcu_pkg::CpuType == cv32e40x || core_v_mini_mcu_pkg::CpuType == cv32e40px) && ${"1" if xif != None else "0"} && (JANUS != 0)) begin: gen_janus_ce
+        janus_ce_top #(
+            .obi_req_t(obi_req_t),
+            .obi_rsp_t(obi_rsp_t),
+            .TOY_CAU  (1'b${janus_toy_cau})
+        ) janus_ce_i (
+            .clk_i,
+            .rst_ni,
+            .obi_req_i        (ext_slave_req[testharness_pkg::JANUS_CE_IDX]),
+            .obi_rsp_o        (ext_slave_resp[testharness_pkg::JANUS_CE_IDX]),
+            .xif_compressed_if(ext_if),
+            .xif_issue_if     (ext_if),
+            .xif_commit_if    (ext_if),
+            .xif_mem_if       (ext_if),
+            .xif_mem_result_if(ext_if),
+            .xif_result_if    (ext_if),
+            // TOY_CAU: no hardware CAU yet (T8), the verdict is a software bit in WALL_CTRL
+            .cau_pass_i       (1'b0),
+            .cau_fail_i       (1'b0),
+            .boot_phase_o     (),
+            .irq_o            ()
+        );
+      end
+
+% endif
       // Quadrilatero
       // ------------
       if ((core_v_mini_mcu_pkg::CpuType == cv32e40x || core_v_mini_mcu_pkg::CpuType == cv32e40px || core_v_mini_mcu_pkg::CpuType == cv32e20) && ${"1" if xif != None else "0"} && (QUADRILATERO != 0)) begin: gen_quadrilatero_wrapper
