@@ -13,6 +13,7 @@ import UPF::*;
   th  = xheep.get_extension("testharness")
   janus = xheep.is_extension_defined("testharness") and th.get("JANUS", 0)
   janus_toy_cau = th.get("JANUS_TOY_CAU", 1) if janus else 0
+  janus_has_cau = th.get("JANUS_HAS_CAU", 1) if janus else 0
   if janus and th.get("QUADRILATERO", 0):
     raise Exception("JANUS and QUADRILATERO are mutually exclusive (both use the CV-X-IF ext_if)")
   if janus and (xif == None or xif.x_num_rs != 3):
@@ -836,7 +837,8 @@ module testharness #(
         janus_ce_top #(
             .obi_req_t(obi_req_t),
             .obi_rsp_t(obi_rsp_t),
-            .TOY_CAU  (1'b${janus_toy_cau})
+            .TOY_CAU  (1'b${janus_toy_cau}),
+            .HAS_CAU  (1'b${janus_has_cau})
         ) janus_ce_i (
             .clk_i,
             .rst_ni,
@@ -848,7 +850,7 @@ module testharness #(
             .xif_mem_if       (ext_if),
             .xif_mem_result_if(ext_if),
             .xif_result_if    (ext_if),
-            // TOY_CAU: no hardware CAU yet (T8), the verdict is a software bit in WALL_CTRL
+            // HAS_CAU=1: the internal CAU drives the Wall (these pins are ignored). TOY_CAU=1 (legacy): software bit in WALL_CTRL
             .cau_pass_i       (1'b0),
             .cau_fail_i       (1'b0),
             .boot_phase_o     (),

@@ -132,9 +132,10 @@ def config():
         "FPU_SS_ZFINX": 0,
         "QUADRILATERO": 0,
         "JANUS": 1,
-        # TOY_CAU=1: a software bit in WALL_CTRL stands in for the CAU PASS verdict.
-        # TODO(T8): set to 0 when the real CAU (HAS_CAU=1) is integrated.
-        "JANUS_TOY_CAU": 1,
+        # Production: the internal CAU (HAS_CAU=1) is the only source of the PASS/FAIL verdict
+        # and the WALL_CTRL software stand-in (TOY_CAU) is disabled in hardware.
+        "JANUS_HAS_CAU": 1,
+        "JANUS_TOY_CAU": 0,
     }
     system.add_extension("testharness", testharness_extension)
 
