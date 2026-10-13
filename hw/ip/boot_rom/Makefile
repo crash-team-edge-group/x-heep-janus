@@ -17,11 +17,20 @@ all: $(boot_rom) boot_rom.dump
 %.sv: %.img
 	$(PYTHON) gen_rom.py $<
 
-%.img: %.bin
-	dd if=$< of=$@ bs=1024 count=1
+# JANUS: ROM_KB sets the image size limit (default 1 KiB, unchanged); JANUS_BOOT_BIN replaces the
+# compiled boot_rom.S by a prebuilt flat binary (janus/sw/boot, linked at the ROM address)
+ROM_KB ?= 1
 
+%.img: %.bin
+	dd if=$< of=$@ bs=1024 count=$(ROM_KB)
+
+ifdef JANUS_BOOT_BIN
+%.bin: $(JANUS_BOOT_BIN)
+	cp $< $@
+else
 %.bin: %.elf
 	$(OBJCOPY) -O binary $< $@
+endif
 
 %.elf: $(findstring boot_rom, $(boot_rom)).S link.ld
 	$(GCC) $(INC_FOLDERS_GCC) -Tlink.ld $< -nostdlib -fPIC -static -Wl,--no-gc-sections -o $@
