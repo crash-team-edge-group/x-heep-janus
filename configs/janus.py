@@ -136,6 +136,8 @@ def config():
         # and the WALL_CTRL software stand-in (TOY_CAU) is disabled in hardware.
         "JANUS_HAS_CAU": 1,
         "JANUS_TOY_CAU": 0,
+        # Unit slots: 0 toy_alu, 1 toy_stream, 2 hash_chain (chain_accel), 3 none. WALL_UNIT_CAPS = 0x00070207.
+        "JANUS_HASH_CHAIN": 1,
     }
     system.add_extension("testharness", testharness_extension)
 

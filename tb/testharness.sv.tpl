@@ -14,6 +14,10 @@ import UPF::*;
   janus = xheep.is_extension_defined("testharness") and th.get("JANUS", 0)
   janus_toy_cau = th.get("JANUS_TOY_CAU", 1) if janus else 0
   janus_has_cau = th.get("JANUS_HAS_CAU", 1) if janus else 0
+  janus_hash_chain = th.get("JANUS_HASH_CHAIN", 0) if janus else 0
+  janus_unit2 = "UK_HASH_CHAIN" if janus_hash_chain else "UK_NONE"
+  if xheep.is_extension_defined("testharness") and th.get("JANUS_HASH_CHAIN", 0) and not th.get("JANUS", 0):
+    raise Exception("JANUS_HASH_CHAIN requires JANUS")
   if janus and th.get("QUADRILATERO", 0):
     raise Exception("JANUS and QUADRILATERO are mutually exclusive (both use the CV-X-IF ext_if)")
   if janus and (xif == None or xif.x_num_rs != 3):
@@ -834,9 +838,13 @@ module testharness #(
       // ------------------------------------------------------------------------------------------
 % if janus:
       if ((core_v_mini_mcu_pkg::CpuType == cv32e40x || core_v_mini_mcu_pkg::CpuType == cv32e40px) && ${"1" if xif != None else "0"} && (JANUS != 0)) begin: gen_janus_ce
+        // Wall state (boot_phase_o) for the simulation monitor below
+        logic [1:0] janus_boot_phase;
+        logic [1:0] janus_boot_phase_q;
         janus_ce_top #(
             .obi_req_t(obi_req_t),
             .obi_rsp_t(obi_rsp_t),
+            .UNIT_KIND('{janus_ce_pkg::UK_TOY_ALU, janus_ce_pkg::UK_TOY_STREAM, janus_ce_pkg::${janus_unit2}, janus_ce_pkg::UK_NONE}),
             .TOY_CAU  (1'b${janus_toy_cau}),
             .HAS_CAU  (1'b${janus_has_cau})
         ) janus_ce_i (
@@ -853,9 +861,19 @@ module testharness #(
             // HAS_CAU=1: the internal CAU drives the Wall (these pins are ignored). TOY_CAU=1 (legacy): software bit in WALL_CTRL
             .cau_pass_i       (1'b0),
             .cau_fail_i       (1'b0),
-            .boot_phase_o     (),
+            .boot_phase_o     (janus_boot_phase),
             .irq_o            ()
         );
+
+        // Simulation-only monitor: log every Wall state change (0 BOOT, 1 QUIESCE, 2 LOCKED, 3 FAILED).
+        // Gives the boot regression positive evidence of the verdict even with the UART-less production ROM.
+        always_ff @(posedge clk_i or negedge rst_ni) begin
+          if (!rst_ni) janus_boot_phase_q <= 2'd0;
+          else begin
+            janus_boot_phase_q <= janus_boot_phase;
+            if (janus_boot_phase != janus_boot_phase_q) $display("%t: JANUS_WALL_STATE %0d", $time, janus_boot_phase);
+          end
+        end
       end
 
 % endif
