@@ -13,6 +13,10 @@ import UPF::*;
   th  = xheep.get_extension("testharness")
   janus = xheep.is_extension_defined("testharness") and th.get("JANUS", 0)
   janus_toy_cau = th.get("JANUS_TOY_CAU", 1) if janus else 0
+  if janus and th.get("QUADRILATERO", 0):
+    raise Exception("JANUS and QUADRILATERO are mutually exclusive (both use the CV-X-IF ext_if)")
+  if janus and (xif == None or xif.x_num_rs != 3):
+    raise Exception("JANUS requires the CV-X-IF with x_num_rs == 3 (R4-type TAL_MAC/TAL_SEL)")
 %>
 
 module testharness #(
