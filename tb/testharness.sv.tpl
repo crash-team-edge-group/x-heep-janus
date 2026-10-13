@@ -20,6 +20,8 @@ import UPF::*;
     raise Exception("JANUS_HASH_CHAIN requires JANUS")
   if janus and th.get("QUADRILATERO", 0):
     raise Exception("JANUS and QUADRILATERO are mutually exclusive (both use the CV-X-IF ext_if)")
+  if janus and cpu.name not in ("cv32e40x", "cv32e40px"):
+    raise Exception("JANUS requires a CPU with the CV-X-IF (cv32e40x or cv32e40px)")
   if janus and (xif == None or xif.x_num_rs != 3):
     raise Exception("JANUS requires the CV-X-IF with x_num_rs == 3 (R4-type TAL_MAC/TAL_SEL)")
 %>
@@ -871,7 +873,9 @@ module testharness #(
           if (!rst_ni) janus_boot_phase_q <= 2'd0;
           else begin
             janus_boot_phase_q <= janus_boot_phase;
+`ifndef SYNTHESIS
             if (janus_boot_phase != janus_boot_phase_q) $display("%t: JANUS_WALL_STATE %0d", $time, janus_boot_phase);
+`endif
           end
         end
       end

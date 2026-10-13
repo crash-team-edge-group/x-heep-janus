@@ -24,7 +24,7 @@ ROM_KB ?= 1
 %.img: %.bin
 	dd if=$< of=$@ bs=1024 count=$(ROM_KB)
 
-ifdef JANUS_BOOT_BIN
+ifneq ($(strip $(JANUS_BOOT_BIN)),)
 %.bin: $(JANUS_BOOT_BIN)
 	cp $< $@
 else
