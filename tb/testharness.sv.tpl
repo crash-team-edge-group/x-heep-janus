@@ -15,6 +15,7 @@ import UPF::*;
   janus_toy_cau = th.get("JANUS_TOY_CAU", 1) if janus else 0
   janus_has_cau = th.get("JANUS_HAS_CAU", 1) if janus else 0
   janus_hash_chain = th.get("JANUS_HASH_CHAIN", 0) if janus else 0
+  janus_dma_ch = th.get("JANUS_DMA_CH", 0) if janus else 0
   janus_unit2 = "UK_HASH_CHAIN" if janus_hash_chain else "UK_NONE"
   if xheep.is_extension_defined("testharness") and th.get("JANUS_HASH_CHAIN", 0) and not th.get("JANUS", 0):
     raise Exception("JANUS_HASH_CHAIN requires JANUS")
@@ -160,11 +161,13 @@ module testharness #(
   // External DMA stop (per channel hardware stop pin); driven by the JANUS CAU sequencer when JANUS
   logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] ext_dma_stop;
 % if janus:
-  logic janus_dma_stop;
-  assign ext_dma_stop[0] = janus_dma_stop;
-  if (core_v_mini_mcu_pkg::DMA_CH_NUM > 1) begin : gen_dma_stop_tie
-    assign ext_dma_stop[core_v_mini_mcu_pkg::DMA_CH_NUM-1:1] = '0;
+  // DMA channel used by the JANUS CAU sequencer (extension parameter JANUS_DMA_CH, default 0)
+  localparam int unsigned JANUS_DMA_CH = ${janus_dma_ch};
+  if (JANUS_DMA_CH >= core_v_mini_mcu_pkg::DMA_CH_NUM) begin : gen_janus_dma_ch_check
+    $fatal(1, "JANUS_DMA_CH=%0d is not a DMA channel (DMA_CH_NUM=%0d)", JANUS_DMA_CH, core_v_mini_mcu_pkg::DMA_CH_NUM);
   end
+  logic janus_dma_stop;
+  assign ext_dma_stop = core_v_mini_mcu_pkg::DMA_CH_NUM'(janus_dma_stop) << JANUS_DMA_CH;
 % else:
   assign ext_dma_stop = '0;
 % endif
@@ -860,7 +863,12 @@ module testharness #(
             .obi_rsp_t(obi_rsp_t),
             .UNIT_KIND('{janus_ce_pkg::UK_TOY_ALU, janus_ce_pkg::UK_TOY_STREAM, janus_ce_pkg::${janus_unit2}, janus_ce_pkg::UK_NONE}),
             .TOY_CAU  (1'b${janus_toy_cau}),
-            .HAS_CAU  (1'b${janus_has_cau})
+            .HAS_CAU  (1'b${janus_has_cau}),
+            // CAU sequencer: X-HEEP DMA controller / channel and the CE unit-1 stream addresses (unit 1 = window + 0x2000)
+            .SEQ_DMA_BASE(core_v_mini_mcu_pkg::DMA_START_ADDRESS),
+            .SEQ_DMA_CH  (JANUS_DMA_CH),
+            .SEQ_SIN_DATA(testharness_pkg::JANUS_CE_START_ADDRESS + 32'h2080),
+            .SEQ_SIN_LAST(testharness_pkg::JANUS_CE_START_ADDRESS + 32'h2084)
         ) janus_ce_i (
             .clk_i,
             .rst_ni,
