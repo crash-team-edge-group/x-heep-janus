@@ -157,6 +157,18 @@ module testharness #(
     assign ext_dma_slot_rx[core_v_mini_mcu_pkg::DMA_CH_NUM-1:1] = '0;
   end
 
+  // External DMA stop (per channel hardware stop pin); driven by the JANUS CAU sequencer when JANUS
+  logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] ext_dma_stop;
+% if janus:
+  logic janus_dma_stop;
+  assign ext_dma_stop[0] = janus_dma_stop;
+  if (core_v_mini_mcu_pkg::DMA_CH_NUM > 1) begin : gen_dma_stop_tie
+    assign ext_dma_stop[core_v_mini_mcu_pkg::DMA_CH_NUM-1:1] = '0;
+  end
+% else:
+  assign ext_dma_stop = '0;
+% endif
+
   // External xbar master/slave and peripheral ports
   logic [EXT_PERIPHERALS_PORT_SEL_WIDTH-1:0] ext_periph_select;
   obi_req_t [EXT_XBAR_NMASTER_RND-1:0] ext_master_req;
@@ -398,7 +410,7 @@ module testharness #(
       .external_subsystem_clkgate_en_no(external_subsystem_clkgate_en_n),
       .ext_dma_slot_tx_i(ext_dma_slot_tx),
       .ext_dma_slot_rx_i(ext_dma_slot_rx),
-      .ext_dma_stop_i('0),
+      .ext_dma_stop_i(ext_dma_stop),
       .intr_ext_peripheral_i(gpio[31]),
       .hw_fifo_done_i({{(core_v_mini_mcu_pkg::DMA_CH_NUM - 1) {1'b0}}, dlc_done}),
       .dma_done_o(dma_busy)
@@ -863,6 +875,7 @@ module testharness #(
             // CAU boot sequencer OBI master (X-HEEP DMA programming + end-of-stream beat), ext master slot 4
             .mst_req_o        (ext_master_req[testharness_pkg::EXT_MASTER4_IDX]),
             .mst_rsp_i        (ext_master_resp[testharness_pkg::EXT_MASTER4_IDX]),
+            .dma_stop_o       (janus_dma_stop),
             // HAS_CAU=1: the internal CAU drives the Wall (these pins are ignored). TOY_CAU=1 (legacy): software bit in WALL_CTRL
             .cau_pass_i       (1'b0),
             .cau_fail_i       (1'b0),
