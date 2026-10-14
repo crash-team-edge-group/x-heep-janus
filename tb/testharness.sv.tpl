@@ -860,6 +860,9 @@ module testharness #(
             .xif_mem_if       (ext_if),
             .xif_mem_result_if(ext_if),
             .xif_result_if    (ext_if),
+            // CAU boot sequencer OBI master (X-HEEP DMA programming + end-of-stream beat), ext master slot 4
+            .mst_req_o        (ext_master_req[testharness_pkg::EXT_MASTER4_IDX]),
+            .mst_rsp_i        (ext_master_resp[testharness_pkg::EXT_MASTER4_IDX]),
             // HAS_CAU=1: the internal CAU drives the Wall (these pins are ignored). TOY_CAU=1 (legacy): software bit in WALL_CTRL
             .cau_pass_i       (1'b0),
             .cau_fail_i       (1'b0),
@@ -910,8 +913,10 @@ module testharness #(
         );
       end else begin : gen_no_quadrilatero_wrapper
 
-        // Tie-off unused Quadrilatero master ports
+        // Tie-off unused Quadrilatero master ports (slot 4 is the JANUS CAU sequencer master when JANUS)
+% if not janus:
         assign ext_master_req[testharness_pkg::EXT_MASTER4_IDX] = '0;
+% endif
         assign ext_master_req[testharness_pkg::EXT_MASTER5_IDX] = '0;
         assign ext_master_req[testharness_pkg::EXT_MASTER6_IDX] = '0;
         assign ext_master_req[testharness_pkg::EXT_MASTER7_IDX] = '0;
