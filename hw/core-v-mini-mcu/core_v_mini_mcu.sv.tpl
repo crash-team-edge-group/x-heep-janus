@@ -339,17 +339,6 @@ module core_v_mini_mcu #(
       .core_sleep_o(core_sleep)
   );
 
-  % if xheep.debug_ss().has_spi_slave() == 0:
-    logic spi_slave_sck_i;
-    assign spi_slave_sck_i = 0;
-    logic spi_slave_cs_i;
-    assign spi_slave_cs_i = 0;
-    logic spi_slave_miso_o;
-    logic spi_slave_miso_oe_o;
-    logic spi_slave_mosi_i;
-    assign spi_slave_mosi_i = 0;
-  % endif
-
   debug_subsystem #(
       .NRHARTS    (NRHARTS),
       .JTAG_IDCODE(JTAG_IDCODE),

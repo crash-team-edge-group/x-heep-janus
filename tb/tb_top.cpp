@@ -19,7 +19,7 @@ void runCycles(unsigned int ncycles, Vtestharness *dut, VerilatedFstC *m_trace){
     sim_time += CLK_PERIOD_ps/2;
     dut->clk_i ^= 1;
     dut->eval();
-    m_trace->dump(sim_time);
+    if(m_trace) m_trace->dump(sim_time);   // JANUS: m_trace is NULL unless +fst is given (CR-1)
   }
 }
 
@@ -37,11 +37,24 @@ int main (int argc, char * argv[])
   // Instantiate the model
   Vtestharness *dut = new Vtestharness;
 
-  // Open VCD
-  Verilated::traceEverOn (true);
-  VerilatedFstC *m_trace = new VerilatedFstC;
-  dut->trace (m_trace, 99);
-  m_trace->open ("waveform.fst");
+  // JANUS (CR-1): the waveform is dumped only on request, "+fst" (waveform.fst) or "+fst=<file>". The FST dump
+  // slows the SoC model to about 1.2 kcycle/s; without the plusarg the model runs without tracing.
+  VerilatedFstC *m_trace = NULL;
+  {
+    std::string fst_file;
+    for (int i = 1; i < argc; ++i) {
+      std::string a = argv[i];
+      if (a == "+fst") fst_file = "waveform.fst";
+      else if (a.rfind("+fst=", 0) == 0) fst_file = a.substr(5);
+    }
+    if (!fst_file.empty()) {
+      Verilated::traceEverOn (true);
+      m_trace = new VerilatedFstC;
+      dut->trace (m_trace, 99);
+      m_trace->open (fst_file.c_str());
+      std::cout<<"[TESTBENCH]: waveform dump to "<<fst_file<<std::endl;
+    }
+  }
 
   XHEEP_CmdLineOptions* cmd_lines_options = new XHEEP_CmdLineOptions(argc,argv);
 
@@ -72,7 +85,7 @@ int main (int argc, char * argv[])
   dut->jtag_tdi_i           = 0;
 
   dut->eval();
-  m_trace->dump(sim_time);
+  if(m_trace) m_trace->dump(sim_time);
 
   dut->rst_ni               = 1;
   dut->boot_select_i        = boot_sel;
@@ -128,7 +141,7 @@ int main (int argc, char * argv[])
     exit_val = 2; // exit 2 to indicate successful run but premature termination
   }
 
-  m_trace->close();
+  if(m_trace) m_trace->close();
   delete dut;
   delete cmd_lines_options;
 

@@ -38,7 +38,18 @@ from linker_script.linker_script import LinkerScript
 from interrupts.interrupts import Interrupts
 
 
-def config():
+# JANUS product configuration (PORT_MODE D, 128 KiB RAM). Variants are built by the thin wrappers
+# configs/janus_{a,b,c}.py (PORT_MODE A/B/C), configs/janus_bench.py (512 KiB RAM, bench SoC) and
+# configs/janus_zknh.py (Zknh-on-XIF baseline instead of the JANUS CE); they only call this function
+# with other arguments, so the file name selects the build and is part of the model stamp of
+# janus/sw/build_model.sh. mcu-gen calls config() without arguments: product configuration.
+#   port_mode   0 A LOOSE_ONLY, 1 B TIGHT_ONLY, 2 C BOTH_OPEN, 3 D JANUS (default)  (janus_v1_pkg::port_mode_e)
+#   refuse_mode 0 RM_ERRVAL (Option A, default), 1 RM_TRAP (Option B, needs the cv32e40px patch)
+#   bench       True: 16 x 32 KiB RAM (W1 128 KiB image), 32 KiB stack
+#   spi_slave   0 (default): the X-HEEP SPI slave (an external OBI master on the debug crossbar port) is NOT
+#               instantiated; 1: LAB ONLY (configs/janus_lab_*.py), external master enabled for SPI/SBA experiments
+#   zknh        True/1: the CV-X-IF coprocessor is janus_zknh_xif (no JANUS CE in this build); 2: P3 hazard experiment
+def config(port_mode=3, refuse_mode=0, bench=False, zknh=False, spi_slave=0):
     system = XHeep()
 
     system.set_bus_type(BusType.NtoM)
@@ -46,7 +57,7 @@ def config():
 
     system.set_xif(
         CvXIf(
-            x_num_rs=3,  # JANUS: R4-type custom-1 ops (TAL_MAC/TAL_SEL) need 3 source registers
+            x_num_rs=2,  # JANUS v1: two source registers (isa.md section 2); R4-type ops are gone
             x_id_width=4,
             x_mem_width=32,
             x_rfr_width=32,
@@ -57,15 +68,25 @@ def config():
     )
 
     memory_ss = MemorySS()
-    memory_ss.add_ram_banks([32] * 2)
-    memory_ss.add_ram_banks_il(4, 16, "data_interleaved")
-    memory_ss.add_linker_section(LinkerSection.by_size("code", 0, 0x000008000))
-    memory_ss.add_linker_section(LinkerSection("data", 0x000008000, None))
+    if bench:
+        # JANUS benchmark SoC (simulation only): 16 x 32 KiB = 512 KiB of continuous RAM,
+        # 256 KiB code/rodata (vectors, signatures) + 256 KiB data (stack, firmware buffer)
+        memory_ss.add_ram_banks([32] * 16)
+        memory_ss.add_linker_section(LinkerSection.by_size("code", 0, 0x000040000))
+        memory_ss.add_linker_section(LinkerSection("data", 0x000040000, None))
+    else:
+        memory_ss.add_ram_banks([32] * 2)
+        memory_ss.add_ram_banks_il(4, 16, "data_interleaved")
+        memory_ss.add_linker_section(LinkerSection.by_size("code", 0, 0x000008000))
+        memory_ss.add_linker_section(LinkerSection("data", 0x000008000, None))
     system.set_memory_ss(memory_ss)
 
-    system.set_linker_script_config(LinkerScript(stack_size=0x800, heap_size=0x800))
+    # bench: 32 KiB stack (SPHINCS+ robust masks, XMSS VLAs)
+    system.set_linker_script_config(
+        LinkerScript(stack_size=0x8000 if bench else 0x800, heap_size=0x800)
+    )
 
-    system.set_debug_ss(DebugSS(has_spi_slave=1))
+    system.set_debug_ss(DebugSS(has_spi_slave=1 if spi_slave else 0))
 
     address_map = AddressMap()
     address_map.add_region(
@@ -119,25 +140,28 @@ def config():
     # User peripherals. All are optional.
     user_peripheral_domain.add_peripheral(RV_plic(0x00000000))
     user_peripheral_domain.add_peripheral(UART(0x00080000))
+    if spi_slave:
+        # LAB ONLY: general SPI host at 0x30010000, driven by the testharness loopback to the SPI slave pads
+        user_peripheral_domain.add_peripheral(SPI_host(0x00010000))
 
     # Add the peripheral domains to the system
     system.add_peripheral_domain(base_peripheral_domain)
     system.add_peripheral_domain(user_peripheral_domain)
 
     # X-HEEP testharness extension
-    # JANUS Cryptographic Engine (CE) + Wall on the CV-X-IF and on ext-slave index 3.
-    # JANUS and QUADRILATERO are mutually exclusive (both use custom-1). corev_pulp must
-    # stay off (custom-0/1 would be decoded as PULP instructions instead of being offloaded).
+    # JANUS v1: one SHA-256 datapath behind the CV-X-IF (tight door) and the OBI slave on ext-slave index 3
+    # (loose door), plus the engine memory port on ext master slot 4. JANUS and QUADRILATERO are mutually
+    # exclusive (the CV-X-IF is shared). corev_pulp must stay off (custom-0/1 would be decoded as PULP
+    # instructions instead of being offloaded).
     testharness_extension = {
         "FPU_SS_ZFINX": 0,
         "QUADRILATERO": 0,
         "JANUS": 1,
-        # Production: the internal CAU (HAS_CAU=1) is the only source of the PASS/FAIL verdict
-        # and the WALL_CTRL software stand-in (TOY_CAU) is disabled in hardware.
-        "JANUS_HAS_CAU": 1,
-        "JANUS_TOY_CAU": 0,
-        # Unit slots: 0 toy_alu, 1 toy_stream, 2 hash_chain (chain_accel), 3 none. WALL_UNIT_CAPS = 0x00070207.
-        "JANUS_HASH_CHAIN": 1,
+        "JANUS_PORT_MODE": int(port_mode),  # janus_v1_pkg::port_mode_e
+        "JANUS_REFUSE_MODE": int(refuse_mode),  # janus_v1_pkg::refuse_mode_e
+        "JANUS_ZKNH": (
+            int(zknh)
+        ),  # 1: Zknh-on-XIF baseline unit instead of the JANUS CE, 2: same unit, also accepts the OP-IMM encodings
     }
     system.add_extension("testharness", testharness_extension)
 

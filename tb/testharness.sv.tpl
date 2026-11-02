@@ -12,19 +12,19 @@ import UPF::*;
   xif = xheep.xif()
   th  = xheep.get_extension("testharness")
   janus = xheep.is_extension_defined("testharness") and th.get("JANUS", 0)
-  janus_toy_cau = th.get("JANUS_TOY_CAU", 1) if janus else 0
-  janus_has_cau = th.get("JANUS_HAS_CAU", 1) if janus else 0
-  janus_hash_chain = th.get("JANUS_HASH_CHAIN", 0) if janus else 0
-  janus_dma_ch = th.get("JANUS_DMA_CH", 0) if janus else 0
-  janus_unit2 = "UK_HASH_CHAIN" if janus_hash_chain else "UK_NONE"
-  if xheep.is_extension_defined("testharness") and th.get("JANUS_HASH_CHAIN", 0) and not th.get("JANUS", 0):
-    raise Exception("JANUS_HASH_CHAIN requires JANUS")
+  janus_port_mode = th.get("JANUS_PORT_MODE", 3) if janus else 3
+  janus_refuse_mode = th.get("JANUS_REFUSE_MODE", 0) if janus else 0
+  janus_zknh = th.get("JANUS_ZKNH", 0) if janus else 0
   if janus and th.get("QUADRILATERO", 0):
     raise Exception("JANUS and QUADRILATERO are mutually exclusive (both use the CV-X-IF ext_if)")
   if janus and cpu.name not in ("cv32e40x", "cv32e40px"):
     raise Exception("JANUS requires a CPU with the CV-X-IF (cv32e40x or cv32e40px)")
-  if janus and (xif == None or xif.x_num_rs != 3):
-    raise Exception("JANUS requires the CV-X-IF with x_num_rs == 3 (R4-type TAL_MAC/TAL_SEL)")
+  if janus and (xif == None or xif.x_num_rs != 2):
+    raise Exception("JANUS v1 requires the CV-X-IF with x_num_rs == 2 (two source registers, isa.md section 2)")
+  if janus and janus_port_mode not in (0, 1, 2, 3):
+    raise Exception("JANUS_PORT_MODE must be 0 (A), 1 (B), 2 (C) or 3 (D)")
+  if janus and janus_refuse_mode not in (0, 1):
+    raise Exception("JANUS_REFUSE_MODE must be 0 (errval) or 1 (trap)")
 %>
 
 module testharness #(
@@ -157,20 +157,6 @@ module testharness #(
     assign ext_dma_slot_tx[core_v_mini_mcu_pkg::DMA_CH_NUM-1:1] = '0;
     assign ext_dma_slot_rx[core_v_mini_mcu_pkg::DMA_CH_NUM-1:1] = '0;
   end
-
-  // External DMA stop (per channel hardware stop pin); driven by the JANUS CAU sequencer when JANUS
-  logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] ext_dma_stop;
-% if janus:
-  // DMA channel used by the JANUS CAU sequencer (extension parameter JANUS_DMA_CH, default 0)
-  localparam int unsigned JANUS_DMA_CH = ${janus_dma_ch};
-  if (JANUS_DMA_CH >= core_v_mini_mcu_pkg::DMA_CH_NUM) begin : gen_janus_dma_ch_check
-    $fatal(1, "JANUS_DMA_CH=%0d is not a DMA channel (DMA_CH_NUM=%0d)", JANUS_DMA_CH, core_v_mini_mcu_pkg::DMA_CH_NUM);
-  end
-  logic janus_dma_stop;
-  assign ext_dma_stop = core_v_mini_mcu_pkg::DMA_CH_NUM'(janus_dma_stop) << JANUS_DMA_CH;
-% else:
-  assign ext_dma_stop = '0;
-% endif
 
   // External xbar master/slave and peripheral ports
   logic [EXT_PERIPHERALS_PORT_SEL_WIDTH-1:0] ext_periph_select;
@@ -413,7 +399,7 @@ module testharness #(
       .external_subsystem_clkgate_en_no(external_subsystem_clkgate_en_n),
       .ext_dma_slot_tx_i(ext_dma_slot_tx),
       .ext_dma_slot_rx_i(ext_dma_slot_rx),
-      .ext_dma_stop_i(ext_dma_stop),
+      .ext_dma_stop_i('0),
       .intr_ext_peripheral_i(gpio[31]),
       .hw_fifo_done_i({{(core_v_mini_mcu_pkg::DMA_CH_NUM - 1) {1'b0}}, dlc_done}),
       .dma_done_o(dma_busy)
@@ -851,24 +837,78 @@ module testharness #(
         );
       end
 
-      // JANUS Cryptographic Engine + Wall (CV-X-IF coprocessor + OBI slave on ext-slave JANUS_CE_IDX)
+      // JANUS v1 root of trust: CV-X-IF coprocessor (tight door) + OBI slave on ext-slave JANUS_CE_IDX (loose
+      // door) + read-only engine memory port on ext master slot 4. janus/docs/{memory_map,mem_port,keys}.md
       // ------------------------------------------------------------------------------------------
 % if janus:
       if ((core_v_mini_mcu_pkg::CpuType == cv32e40x || core_v_mini_mcu_pkg::CpuType == cv32e40px) && ${"1" if xif != None else "0"} && (JANUS != 0)) begin: gen_janus_ce
         // Wall state (boot_phase_o) for the simulation monitor below
         logic [1:0] janus_boot_phase;
         logic [1:0] janus_boot_phase_q;
+        initial $display("%t: JANUS_BUILD PORT_MODE=${janus_port_mode} REFUSE_MODE=${janus_refuse_mode} ZKNH=${janus_zknh}", $time);
+% if janus_zknh:
+        // Zknh-on-XIF baseline build: the CV-X-IF coprocessor is janus_zknh_xif, there is no JANUS CE
+        // JANUS_ZKNH = 2: also accept the ratified OP-IMM encodings (P3 hazard experiment, configs/janus_zknh_std.py)
+        janus_zknh_xif #(.STD_ENC(1'b${1 if janus_zknh == 2 else 0})) janus_zknh_i (
+            .clk_i,
+            .rst_ni,
+            .xif_compressed_if(ext_if),
+            .xif_issue_if     (ext_if),
+            .xif_commit_if    (ext_if),
+            .xif_mem_if       (ext_if),
+            .xif_mem_result_if(ext_if),
+            .xif_result_if    (ext_if)
+        );
+        assign ext_slave_resp[testharness_pkg::JANUS_CE_IDX] = '0;
+        assign ext_master_req[testharness_pkg::EXT_MASTER4_IDX] = '0;
+        assign janus_boot_phase = 2'd0;
+% else:
+        // ---- OTP model (simulation only, janus/docs/keys.md section 7): constant after time 0 ----
+        // Plusargs (hex strings are byte strings, first byte first, byte k = characters 2k..2k+1):
+        //   +janus_uds=<64 hex>  +janus_root_pk=<112 hex>  +janus_min_version=<8 hex>  +janus_dbg_en=<0|1>
+        //   +janus_otp_invalid
+        // Defaults (test values, NOT secrets): UDS = 00 01 .. 1F, min_version = 1, dbg_en = 0, valid = 1,
+        // root_pk = all zeros (no image verifies until the test supplies its signer's key).
+        janus_v1_pkg::otp_t janus_otp;
+        logic               janus_dbg_en;
+
+        function automatic logic [3:0] janus_nib(input byte c);
+          if (c >= "0" && c <= "9")      return 4'(c - "0");
+          else if (c >= "a" && c <= "f") return 4'(c - "a" + 10);
+          else if (c >= "A" && c <= "F") return 4'(c - "A" + 10);
+          else                           return 4'hx;
+        endfunction
+
+        initial begin
+          string       str;
+          int unsigned val;
+          janus_otp    = '0;
+          for (int i = 0; i < 32; i++) janus_otp.uds[i] = 8'(i);
+          janus_otp.min_version = 32'd1;
+          janus_otp.valid       = 1'b1;
+          janus_dbg_en          = 1'b0;
+          if ($value$plusargs("janus_uds=%s", str)) begin
+            if (str.len() != 64) $fatal(1, "+janus_uds needs 64 hex characters (got %0d)", str.len());
+            for (int k = 0; k < 32; k++) janus_otp.uds[k] = {janus_nib(str.getc(2 * k)), janus_nib(str.getc(2 * k + 1))};
+          end
+          if ($value$plusargs("janus_root_pk=%s", str)) begin
+            if (str.len() != 112) $fatal(1, "+janus_root_pk needs 112 hex characters (got %0d)", str.len());
+            for (int k = 0; k < 56; k++) janus_otp.root_pk[k] = {janus_nib(str.getc(2 * k)), janus_nib(str.getc(2 * k + 1))};
+          end
+          if ($value$plusargs("janus_min_version=%h", val)) janus_otp.min_version = val;
+          if ($value$plusargs("janus_dbg_en=%d", val))      janus_dbg_en = val[0];
+          if ($test$plusargs("janus_otp_invalid"))          janus_otp.valid = 1'b0;
+          $display("%t: JANUS_OTP valid=%0d min_version=%0d dbg_en=%0d", $time, janus_otp.valid, janus_otp.min_version, janus_dbg_en);
+        end
+
         janus_ce_top #(
-            .obi_req_t(obi_req_t),
-            .obi_rsp_t(obi_rsp_t),
-            .UNIT_KIND('{janus_ce_pkg::UK_TOY_ALU, janus_ce_pkg::UK_TOY_STREAM, janus_ce_pkg::${janus_unit2}, janus_ce_pkg::UK_NONE}),
-            .TOY_CAU  (1'b${janus_toy_cau}),
-            .HAS_CAU  (1'b${janus_has_cau}),
-            // CAU sequencer: X-HEEP DMA controller / channel and the CE unit-1 stream addresses (unit 1 = window + 0x2000)
-            .SEQ_DMA_BASE(core_v_mini_mcu_pkg::DMA_START_ADDRESS),
-            .SEQ_DMA_CH  (JANUS_DMA_CH),
-            .SEQ_SIN_DATA(testharness_pkg::JANUS_CE_START_ADDRESS + 32'h2080),
-            .SEQ_SIN_LAST(testharness_pkg::JANUS_CE_START_ADDRESS + 32'h2084)
+            .PORT_MODE    (janus_v1_pkg::${["PM_LOOSE_ONLY", "PM_TIGHT_ONLY", "PM_BOTH_OPEN", "PM_JANUS"][janus_port_mode]}),
+            .REFUSE_MODE  (janus_v1_pkg::${["RM_ERRVAL", "RM_TRAP"][janus_refuse_mode]}),
+            // engine memory port window = the RAM of this configuration (mem_port.md section 3)
+            .MEM_WIN_BASE (core_v_mini_mcu_pkg::RAM0_START_ADDRESS),
+            .MEM_WIN_END  (core_v_mini_mcu_pkg::RAM0_START_ADDRESS + core_v_mini_mcu_pkg::MEM_SIZE),
+            .obi_req_t    (obi_req_t),
+            .obi_rsp_t    (obi_rsp_t)
         ) janus_ce_i (
             .clk_i,
             .rst_ni,
@@ -880,16 +920,38 @@ module testharness #(
             .xif_mem_if       (ext_if),
             .xif_mem_result_if(ext_if),
             .xif_result_if    (ext_if),
-            // CAU boot sequencer OBI master (X-HEEP DMA programming + end-of-stream beat), ext master slot 4
+            // engine memory port: read-only OBI master, ext master slot 4
             .mst_req_o        (ext_master_req[testharness_pkg::EXT_MASTER4_IDX]),
             .mst_rsp_i        (ext_master_resp[testharness_pkg::EXT_MASTER4_IDX]),
-            .dma_stop_o       (janus_dma_stop),
-            // HAS_CAU=1: the internal CAU drives the Wall (these pins are ignored). TOY_CAU=1 (legacy): software bit in WALL_CTRL
-            .cau_pass_i       (1'b0),
-            .cau_fail_i       (1'b0),
+            .otp_i            (janus_otp),
+            .dbg_en_i         (janus_dbg_en),
+            // boot_select = 0: JTAG / debug boot path, untrusted code runs in BOOT (keys.md section 5)
+            .boot_bypass_i    (~boot_select_i),
             .boot_phase_o     (janus_boot_phase),
             .irq_o            ()
         );
+
+`ifndef SYNTHESIS
+        // Simulation-only monitor: one line whenever a Wall violation counter or WALL_ERR changes (positive evidence of
+        // refused / sealed accesses for the attack suite). Hierarchical read of the Wall registers, no RTL change.
+        logic [7:0]  janus_vl_q, janus_vt_q, janus_vm_q;
+        logic [31:0] janus_err_q;
+        always_ff @(posedge clk_i or negedge rst_ni) begin
+          if (!rst_ni) begin
+            janus_vl_q <= '0; janus_vt_q <= '0; janus_vm_q <= '0; janus_err_q <= '0;
+          end else begin
+            janus_vl_q  <= janus_ce_i.u_wall.viol_l_q;
+            janus_vt_q  <= janus_ce_i.u_wall.viol_t_q;
+            janus_vm_q  <= janus_ce_i.u_wall.viol_m_q;
+            janus_err_q <= 32'(janus_ce_i.u_wall.err_q);
+            if (janus_ce_i.u_wall.viol_l_q != janus_vl_q || janus_ce_i.u_wall.viol_t_q != janus_vt_q ||
+                janus_ce_i.u_wall.viol_m_q != janus_vm_q || 32'(janus_ce_i.u_wall.err_q) != janus_err_q)
+              $display("%t: JANUS_VIOL loose=%0d tight=%0d mem=%0d err=0x%08x", $time, janus_ce_i.u_wall.viol_l_q,
+                       janus_ce_i.u_wall.viol_t_q, janus_ce_i.u_wall.viol_m_q, 32'(janus_ce_i.u_wall.err_q));
+          end
+        end
+`endif
+% endif
 
         // Simulation-only monitor: log every Wall state change (0 BOOT, 1 QUIESCE, 2 LOCKED, 3 FAILED).
         // Gives the boot regression positive evidence of the verdict even with the UART-less production ROM.
@@ -934,7 +996,7 @@ module testharness #(
         );
       end else begin : gen_no_quadrilatero_wrapper
 
-        // Tie-off unused Quadrilatero master ports (slot 4 is the JANUS CAU sequencer master when JANUS)
+        // Tie-off unused Quadrilatero master ports (slot 4 is the JANUS engine memory port master when JANUS)
 % if not janus:
         assign ext_master_req[testharness_pkg::EXT_MASTER4_IDX] = '0;
 % endif
