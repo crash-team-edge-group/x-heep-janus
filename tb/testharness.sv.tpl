@@ -15,6 +15,10 @@ import UPF::*;
   janus_port_mode = th.get("JANUS_PORT_MODE", 3) if janus else 3
   janus_refuse_mode = th.get("JANUS_REFUSE_MODE", 0) if janus else 0
   janus_zknh = th.get("JANUS_ZKNH", 0) if janus else 0
+  janus_af = th.get("JANUS_AF", 0) if janus else 0
+  janus_af_check_mask = th.get("JANUS_AF_CHECK_MASK", 0xFFFFFFFF) if janus_af else 0xFFFFFFFF
+  janus_af_reset_enable = th.get("JANUS_AF_RESET_ENABLE", 1) if janus_af else 1
+  janus_af_prelock = th.get("JANUS_AF_PRELOCK", 0) if janus_af else 0
   if janus and th.get("QUADRILATERO", 0):
     raise Exception("JANUS and QUADRILATERO are mutually exclusive (both use the CV-X-IF ext_if)")
   if janus and cpu.name not in ("cv32e40x", "cv32e40px"):
@@ -25,6 +29,8 @@ import UPF::*;
     raise Exception("JANUS_PORT_MODE must be 0 (A), 1 (B), 2 (C) or 3 (D)")
   if janus and janus_refuse_mode not in (0, 1):
     raise Exception("JANUS_REFUSE_MODE must be 0 (errval) or 1 (trap)")
+  if janus_af and (janus_port_mode != 0 or janus_zknh):
+    raise Exception("JANUS_AF is defined on build A only (JANUS_PORT_MODE = 0, JANUS_ZKNH = 0)")
 %>
 
 module testharness #(
@@ -410,6 +416,33 @@ module testharness #(
       % endif
   );
 
+% if janus_af:
+  // Build A+F (janus/eval/docs/af_filter.md section 7.5): filter configuration block on ext slave JANUS_AF_IDX; policy and
+  // violation events connect to the janus_af_port checkers inside ext_bus. Reached only through ext_xbar.
+  janus_af_pkg::af_policy_t af_policy;
+  janus_af_pkg::af_viol_t [core_v_mini_mcu_pkg::SYSTEM_XBAR_NMASTER+EXT_XBAR_NMASTER-1:0] af_viol;
+
+  janus_af_cfg #(
+      .N_PORTS(core_v_mini_mcu_pkg::SYSTEM_XBAR_NMASTER + EXT_XBAR_NMASTER),
+      .N_ENTRIES(4),
+      .CFG_PORT(core_v_mini_mcu_pkg::CORE_DATA_IDX),
+      .RESET_ENABLE(1'b${janus_af_reset_enable}),
+      .PRELOCK(1'b${janus_af_prelock}),
+      .obi_req_t(obi_req_t),
+      .obi_rsp_t(obi_rsp_t)
+  ) janus_af_cfg_i (
+      .clk_i,
+      .rst_ni,
+      .obi_req_i(ext_slave_req[testharness_pkg::JANUS_AF_IDX]),
+      .obi_rsp_o(ext_slave_resp[testharness_pkg::JANUS_AF_IDX]),
+      .policy_o(af_policy),
+      .viol_i(af_viol),
+      .locked_o(),
+      .irq_o()
+  );
+  initial $display("%t: JANUS_AF CHECK_MASK=0x${"%08x" % janus_af_check_mask} RESET_ENABLE=${janus_af_reset_enable} PRELOCK=${janus_af_prelock}", $time);
+
+% endif
   // Testbench external bus
   // ----------------------
   // The external bus connects the external peripherals among them and to
@@ -419,6 +452,10 @@ module testharness #(
       .EXT_XBAR_NSLAVE (EXT_XBAR_NSLAVE),
       .obi_req_t(obi_req_t),
       .obi_rsp_t(obi_rsp_t)
+% if janus_af:
+      ,
+      .AF_CHECK_MASK(32'h${"%08x" % janus_af_check_mask})
+% endif
   ) ext_bus_i (
       .clk_i                   (clk_i),
       .rst_ni                  (rst_ni),
@@ -442,6 +479,11 @@ module testharness #(
       .heep_slave_resp_i       (heep_slave_resp),
       .ext_slave_req_o         (ext_slave_req),
       .ext_slave_resp_i        (ext_slave_resp)
+% if janus_af:
+      ,
+      .af_policy_i             (af_policy),
+      .af_viol_o               (af_viol)
+% endif
   );
 
   // Power switch emulation

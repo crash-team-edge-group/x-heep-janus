@@ -4,6 +4,7 @@
 <%
   user_peripheral_domain = xheep.get_user_peripheral_domain()
   janus = xheep.is_extension_defined("testharness") and xheep.get_extension("testharness").get("JANUS", 0)
+  janus_af = janus and xheep.get_extension("testharness").get("JANUS_AF", 0)
 %>
 package testharness_pkg;
 
@@ -14,7 +15,7 @@ package testharness_pkg;
 `ifdef SIM_SYSTEMC
   localparam EXT_XBAR_NSLAVE = 1;
 `else
-  localparam EXT_XBAR_NSLAVE = ${3 + (1 if user_peripheral_domain.contains_peripheral('serial_link_reg') else 0) + (1 if janus else 0)};
+  localparam EXT_XBAR_NSLAVE = ${3 + (1 if user_peripheral_domain.contains_peripheral('serial_link_reg') else 0) + (1 if janus else 0) + (1 if janus_af else 0)};
 `endif
 
   //master idx
@@ -68,6 +69,15 @@ package testharness_pkg;
   localparam logic [31:0] JANUS_CE_IDX = ${3 + (1 if user_peripheral_domain.contains_peripheral('serial_link_reg') else 0)};
   % endif
 
+  % if janus_af:
+  // Build A+F filter configuration block: contiguous with the CE window, so the checked range is one interval
+  // (janus/eval/docs/af_filter.md section 4.1)
+  localparam logic [31:0] JANUS_AF_START_ADDRESS = core_v_mini_mcu_pkg::EXT_SLAVE_START_ADDRESS + 32'h110000;
+  localparam logic [31:0] JANUS_AF_SIZE = 32'h1000;
+  localparam logic [31:0] JANUS_AF_END_ADDRESS = JANUS_AF_START_ADDRESS + JANUS_AF_SIZE;
+  localparam logic [31:0] JANUS_AF_IDX = JANUS_CE_IDX + 32'd1;
+  % endif
+
   localparam addr_map_rule_t [EXT_XBAR_NSLAVE-1:0] EXT_XBAR_ADDR_RULES = '{
       '{
           idx: SLOW_MEMORY0_IDX,
@@ -96,6 +106,10 @@ package testharness_pkg;
       % if janus:
       ,
       '{idx: JANUS_CE_IDX, start_addr: JANUS_CE_START_ADDRESS, end_addr: JANUS_CE_END_ADDRESS}
+      % endif
+      % if janus_af:
+      ,
+      '{idx: JANUS_AF_IDX, start_addr: JANUS_AF_START_ADDRESS, end_addr: JANUS_AF_END_ADDRESS}
       % endif
 `endif
   };

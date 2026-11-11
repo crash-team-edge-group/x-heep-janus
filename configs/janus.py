@@ -49,7 +49,31 @@ from interrupts.interrupts import Interrupts
 #   spi_slave   0 (default): the X-HEEP SPI slave (an external OBI master on the debug crossbar port) is NOT
 #               instantiated; 1: LAB ONLY (configs/janus_lab_*.py), external master enabled for SPI/SBA experiments
 #   zknh        True/1: the CV-X-IF coprocessor is janus_zknh_xif (no JANUS CE in this build); 2: P3 hazard experiment
-def config(port_mode=3, refuse_mode=0, bench=False, zknh=False, spi_slave=0):
+#   af          1: build A+F (configs/janus_af.py): per-initiator filter janus_af_port on every ext_xbar master port and
+#               the configuration block janus_af_cfg on ext slave JANUS_AF_IDX (janus/eval/docs/af_filter.md)
+#   af_check_mask  (af only) bit k = 1: ext_xbar master port k is checked; default all ports (red-team MF4a clears bits)
+#   af_reset_enable (af only) 1 (default): fail-closed reset; 0: IOPMP-style unchecked until enabled (red-team MF5)
+#   af_prelock  (af only) 1: A+F-H, policy hardwired to the production policy and locked at reset
+def config(
+    port_mode=3,
+    refuse_mode=0,
+    bench=False,
+    zknh=False,
+    spi_slave=0,
+    af=0,
+    af_check_mask=0xFFFFFFFF,
+    af_reset_enable=1,
+    af_prelock=0,
+):
+    if not af and (af_check_mask != 0xFFFFFFFF or not af_reset_enable or af_prelock):
+        raise ValueError(
+            "janus.py: af_check_mask / af_reset_enable / af_prelock require af=1"
+        )
+    if not 0 <= int(af_check_mask) <= 0xFFFFFFFF:
+        raise ValueError("janus.py: af_check_mask must fit in 32 bits")
+    if af_prelock and not af_reset_enable:
+        raise ValueError("janus.py: af_prelock requires af_reset_enable=1")
+
     system = XHeep()
 
     system.set_bus_type(BusType.NtoM)
@@ -162,6 +186,12 @@ def config(port_mode=3, refuse_mode=0, bench=False, zknh=False, spi_slave=0):
         "JANUS_ZKNH": (
             int(zknh)
         ),  # 1: Zknh-on-XIF baseline unit instead of the JANUS CE, 2: same unit, also accepts the OP-IMM encodings
+        "JANUS_AF": int(
+            af
+        ),  # 1: build A+F (per-initiator filter + configuration block)
+        "JANUS_AF_CHECK_MASK": int(af_check_mask),
+        "JANUS_AF_RESET_ENABLE": int(af_reset_enable),
+        "JANUS_AF_PRELOCK": int(af_prelock),
     }
     system.add_extension("testharness", testharness_extension)
 

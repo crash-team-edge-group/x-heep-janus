@@ -9,6 +9,8 @@
 
 <%
   user_peripheral_domain = xheep.get_user_peripheral_domain()
+  th = xheep.get_extension("testharness") if xheep.is_extension_defined("testharness") else {}
+  janus_af = xheep.is_extension_defined("testharness") and th.get("JANUS", 0) and th.get("JANUS_AF", 0)
 %>
 
 module ext_bus #(
@@ -21,6 +23,13 @@ module ext_bus #(
     // OBI data types
     parameter type obi_req_t = logic,
     parameter type obi_rsp_t = logic
+% if janus_af:
+    ,
+    // Build A+F (janus/eval/docs/af_filter.md section 7.4): checked range, bit k = 1 drives CHECK of master port k
+    parameter logic [31:0] AF_CHK_BASE = janus_af_pkg::AF_CHK_BASE_DEFAULT,
+    parameter logic [31:0] AF_CHK_LIM = janus_af_pkg::AF_CHK_LIM_DEFAULT,
+    parameter logic [31:0] AF_CHECK_MASK = 32'hFFFF_FFFF
+% endif
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -61,6 +70,12 @@ module ext_bus #(
     // External slave ports
     output obi_req_t [EXT_XBAR_NSLAVE_RND-1:0] ext_slave_req_o,
     input  obi_rsp_t [EXT_XBAR_NSLAVE_RND-1:0] ext_slave_resp_i
+% if janus_af:
+    ,
+    // Build A+F: policy of the filter and violation events of the per-port checkers
+    input  janus_af_pkg::af_policy_t af_policy_i,
+    output janus_af_pkg::af_viol_t [core_v_mini_mcu_pkg::SYSTEM_XBAR_NMASTER+EXT_XBAR_NMASTER-1:0] af_viol_o
+% endif
 );
   import addr_map_rule_pkg::*;
   import core_v_mini_mcu_pkg::*;
@@ -178,6 +193,44 @@ module ext_bus #(
     end
   endgenerate
 
+% if janus_af:
+  // Build A+F: one janus_af_port per ext_xbar master port, RRID = port index (af_filter.md sections 3.1 and 7.4)
+  obi_req_t [core_v_mini_mcu_pkg::SYSTEM_XBAR_NMASTER+EXT_XBAR_NMASTER-1:0] master_req_chk;
+  obi_rsp_t [core_v_mini_mcu_pkg::SYSTEM_XBAR_NMASTER+EXT_XBAR_NMASTER-1:0] master_resp_chk;
+
+  if (core_v_mini_mcu_pkg::SYSTEM_XBAR_NMASTER + EXT_XBAR_NMASTER > janus_af_pkg::AF_MAX_PORTS) begin : gen_af_err_ports
+    $error("A+F: more ext_xbar master ports than janus_af_pkg::AF_MAX_PORTS");
+  end
+  if (AF_CHK_BASE != testharness_pkg::JANUS_CE_START_ADDRESS || AF_CHK_LIM != testharness_pkg::JANUS_AF_END_ADDRESS) begin : gen_af_err_rng
+    $error("A+F: checked range differs from the CE window + configuration block of testharness_pkg");
+  end
+
+  generate
+    for (
+        genvar k = 0; k < core_v_mini_mcu_pkg::SYSTEM_XBAR_NMASTER + EXT_XBAR_NMASTER; k++
+    ) begin : gen_af_port
+      janus_af_port #(
+          .PORT_ID(k),
+          .CHECK(AF_CHECK_MASK[k]),
+          .CHK_BASE(AF_CHK_BASE),
+          .CHK_LIM(AF_CHK_LIM),
+          .CFG_PORT(core_v_mini_mcu_pkg::CORE_DATA_IDX),
+          .obi_req_t(obi_req_t),
+          .obi_rsp_t(obi_rsp_t)
+      ) janus_af_port_i (
+          .clk_i,
+          .rst_ni,
+          .policy_i(af_policy_i),
+          .up_req_i(master_req[k]),
+          .up_rsp_o(master_resp[k]),
+          .dn_req_o(master_req_chk[k]),
+          .dn_rsp_i(master_resp_chk[k]),
+          .viol_o(af_viol_o[k])
+      );
+    end
+  endgenerate
+
+% endif
   // External system crossbar
   // ------------------------
   ext_xbar #(
@@ -190,8 +243,13 @@ module ext_bus #(
       .rst_ni(rst_ni),
       .addr_map_i(addr_map_i),
       .default_idx_i(default_idx_i),
+% if janus_af:
+      .master_req_i(master_req_chk),
+      .master_resp_o(master_resp_chk),
+% else:
       .master_req_i(master_req),
       .master_resp_o(master_resp),
+% endif
       .slave_req_o(ext_slave_req_o),
       .slave_resp_i(ext_slave_resp_i)
   );
